@@ -200,13 +200,10 @@ class MapboxNavigation(
             )
             MapboxMetricsReporter.toggleLogging(navigationOptions.isDebugLoggingEnabled)
             MapboxNavigationTelemetry.initialize(
-                navigationOptions.applicationContext,
                 this,
-                MapboxMetricsReporter,
-                navigationOptions.locationEngine.javaClass.name,
-                ThreadController.getMainScopeAndRootJob(),
                 navigationOptions,
-                obtainUserAgent(navigationOptions.isFromNavigationUi)
+                MapboxMetricsReporter,
+                ThreadController.getMainScopeAndRootJob()
             )
         }
 
@@ -330,7 +327,7 @@ class MapboxNavigation(
     fun onDestroy() {
         logger.d(
             Tag(MapboxNavigationTelemetry.TAG),
-            Message("onDestroy")
+            Message("MapboxNavigation onDestroy")
         )
         MapboxNavigationTelemetry.unregisterListeners(this@MapboxNavigation)
         directionsSession.shutdown()
