@@ -214,14 +214,15 @@ class WaypointsRerouteActivity :
             routeSettings.destination = latLng.toPoint()
             mapboxMap.locationComponent.lastKnownLocation?.let { originLocation ->
                 mapboxNavigation?.requestRoutes(
-                    RouteOptions.builder().applyDefaultParams()
-                        .accessToken(Utils.getMapboxAccessToken(applicationContext))
-                        .coordinates(stopsController.coordinates(originLocation))
-                        .waypointIndices("0;${stopsController.stops.size}")
-                        .alternatives(true)
-                        .profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC)
-                        .build(),
-                    routesReqCallback
+                        RouteOptions.builder().applyDefaultParams()
+                                .accessToken(Utils.getMapboxAccessToken(applicationContext))
+                                .coordinates(stopsController.coordinates(originLocation))
+                                .waypointNames("start;finish")
+                                .waypointIndices("0;${stopsController.stops.size}")
+                                .alternatives(true)
+                                .profile(DirectionsCriteria.PROFILE_DRIVING_TRAFFIC)
+                                .build(),
+                        routesReqCallback
                 )
             }
             true
