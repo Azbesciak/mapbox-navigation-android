@@ -89,7 +89,7 @@ open class BasicNavigationActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     override fun onMapReady(mapboxMap: MapboxMap) {
-        mapboxMap.setStyle(Style.MAPBOX_STREETS) {
+        mapboxMap.setStyle("mapbox://styles/seth-bourget/ckg8g1ihr039n18mipipn5jxr") {
             mapboxMap.moveCamera(CameraUpdateFactory.zoomTo(15.0))
             navigationMapboxMap = NavigationMapboxMap(mapView, mapboxMap, this, null, true, true)
 

@@ -1210,6 +1210,15 @@ internal class MapRouteLine(
                 ?.map { it.annotation()?.congestion() ?: listOf() }
                 ?.flatten() ?: listOf()
 
+
+            route.legs()?.forEach {
+                it.steps()?.forEach { legStep ->
+                    legStep.intersections()?.forEach {  stepIntersection ->
+                        Timber.e("*** road class ${stepIntersection.mapboxStreetsV8()?.roadClass()}")
+                    }
+                }
+            }
+
             return when (congestionSections.isEmpty()) {
                 false -> calculateRouteLineSegmentsFromCongestion(
                     congestionSections,
