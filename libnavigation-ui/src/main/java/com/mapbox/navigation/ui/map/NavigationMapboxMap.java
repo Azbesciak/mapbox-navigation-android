@@ -951,7 +951,7 @@ public class NavigationMapboxMap implements LifecycleObserver {
           @NonNull MapView mapView,
           @NonNull MapboxMap map, boolean useSpecializedLocationLayer) {
     locationComponent = map.getLocationComponent();
-    map.setMaxZoomPreference(NAVIGATION_MAXIMUM_MAP_ZOOM);
+//    map.setMaxZoomPreference(NAVIGATION_MAXIMUM_MAP_ZOOM);
     Context context = mapView.getContext();
     Style style = map.getStyle();
     int locationLayerStyleRes = ThemeSwitcher.retrieveAttrResourceId(context,

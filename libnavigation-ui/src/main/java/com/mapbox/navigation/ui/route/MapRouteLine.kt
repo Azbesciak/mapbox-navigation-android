@@ -2,6 +2,7 @@ package com.mapbox.navigation.ui.route
 
 import android.content.Context
 import android.graphics.drawable.Drawable
+import android.util.Log
 import android.util.LruCache
 import androidx.annotation.AnyRes
 import androidx.annotation.ColorInt
@@ -16,6 +17,7 @@ import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
 import com.mapbox.mapboxsdk.location.LocationComponentConstants
 import com.mapbox.mapboxsdk.maps.Style
+import com.mapbox.mapboxsdk.plugins.annotation.Line
 import com.mapbox.mapboxsdk.style.expressions.Expression
 import com.mapbox.mapboxsdk.style.layers.LineLayer
 import com.mapbox.mapboxsdk.style.layers.Property
@@ -47,6 +49,8 @@ import com.mapbox.navigation.ui.internal.route.RouteLayerProvider
 import com.mapbox.navigation.ui.internal.utils.MapUtils
 import com.mapbox.navigation.ui.internal.utils.MemoizeUtils.memoize
 import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.buildWayPointFeatureCollection
+import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.calculateDistance
+import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.calculateLastIndex
 import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.calculatePreciseDistanceTraveledAlongLine
 import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.calculateRouteLineSegments
 import com.mapbox.navigation.ui.route.MapRouteLine.MapRouteLineSupport.generateFeatureCollection
@@ -63,6 +67,9 @@ import com.mapbox.turf.TurfMisc
 import timber.log.Timber
 import java.math.BigDecimal
 import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Responsible for the appearance of the route lines on the map. This class applies styling
@@ -92,7 +99,7 @@ internal class MapRouteLine(
     allRoutesVisible: Boolean,
     alternativesVisible: Boolean,
     mapRouteSourceProvider: MapRouteSourceProvider,
-    vanishPoint: Float,
+    vanishPoint: Double,
     routeLineInitializedCallback: MapRouteLineInitializedCallback?
 ) {
 
@@ -123,7 +130,7 @@ internal class MapRouteLine(
         true,
         true,
         mapRouteSourceProvider,
-        0f,
+        0.0,
         routeLineInitializedCallback
     )
 
@@ -144,7 +151,7 @@ internal class MapRouteLine(
     private var alternativesVisible = true
     private var allLayersAreVisible = true
     private var primaryRoute: DirectionsRoute? = null
-    var vanishPointOffset: Float = 0f
+    var vanishPointOffset: Double = 0.0
         private set
     private var vanishingPointUpdateInhibited: Boolean = true
     private val distanceRemainingCache = LruCache<DirectionsRoute, Float>(2)
@@ -579,20 +586,20 @@ internal class MapRouteLine(
     }
 
     private fun getIdentifiableRouteFeatureDataProvider(directionsRoutes: List<IdentifiableRoute>):
-        () -> List<RouteFeatureData> = {
-            directionsRoutes.parallelMap(
-                ::generateFeatureCollection,
-                ThreadController.getMainScopeAndRootJob().scope
-            )
-        }
+            () -> List<RouteFeatureData> = {
+        directionsRoutes.parallelMap(
+            ::generateFeatureCollection,
+            ThreadController.getMainScopeAndRootJob().scope
+        )
+    }
 
     private fun getRouteFeatureDataProvider(directionsRoutes: List<DirectionsRoute>):
-        () -> List<RouteFeatureData> = {
-            directionsRoutes.parallelMap(
-                ::generateFeatureCollection,
-                ThreadController.getMainScopeAndRootJob().scope
-            )
-        }
+            () -> List<RouteFeatureData> = {
+        directionsRoutes.parallelMap(
+            ::generateFeatureCollection,
+            ThreadController.getMainScopeAndRootJob().scope
+        )
+    }
 
     /**
      * Initializes the layers used for drawing routes.
@@ -743,7 +750,7 @@ internal class MapRouteLine(
      *
      * @return the Expression that can be used in a Layer's properties.
      */
-    fun getExpressionAtOffset(distanceOffset: Float): Expression {
+    fun getExpressionAtOffset(distanceOffset: Double): Expression {
         vanishPointOffset = distanceOffset
         val filteredItems = routeLineExpressionData.filter { it.offset > distanceOffset }
         val trafficExpressions = when (filteredItems.isEmpty()) {
@@ -762,7 +769,7 @@ internal class MapRouteLine(
             }
         }.map {
             Expression.stop(
-                it.offset.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN),
+                it/*.offset.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
                 Expression.color(it.segmentColor)
             )
         }
@@ -775,7 +782,7 @@ internal class MapRouteLine(
     }
 
     fun clearRouteData() {
-        vanishPointOffset = 0f
+        vanishPointOffset = 0.0
         primaryRoute = null
         directionsRoutes.clear()
         routeFeatureData.clear()
@@ -785,9 +792,16 @@ internal class MapRouteLine(
         setWaypointsSource(FeatureCollection.fromFeatures(arrayOf()))
     }
 
+    var primaryRouteLength = 0.0
     private fun setPrimaryRoutesSource(featureCollection: FeatureCollection) {
         drawnPrimaryRouteFeatureCollection = featureCollection
         primaryRouteLineSource.setGeoJson(drawnPrimaryRouteFeatureCollection)
+        val coordinates = (featureCollection.features()?.firstOrNull()?.geometry() as? LineString)?.coordinates()
+        primaryRouteLength = if (coordinates != null && coordinates.isNotEmpty()) {
+            calculateDistance(coordinates)
+        } else {
+            0.0
+        }
     }
 
     private fun setAlternativeRoutesSource(featureCollection: FeatureCollection) {
@@ -856,12 +870,12 @@ internal class MapRouteLine(
      *
      * @param offset the offset of the visibility in the expression
      */
-    fun hideCasingLineAtOffset(offset: Float) {
+    fun hideCasingLineAtOffset(offset: Double) {
         val expression = Expression.step(
             Expression.lineProgress(),
             Expression.color(routeLineCasingTraveledColor),
             Expression.stop(
-                offset.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN),
+                offset/*.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
                 Expression.color(routeCasingColor)
             )
         )
@@ -876,12 +890,12 @@ internal class MapRouteLine(
      *
      * @param offset the offset of the visibility in the expression
      */
-    fun hideRouteLineAtOffset(offset: Float) {
+    fun hideRouteLineAtOffset(offset: Double) {
         val expression = Expression.step(
             Expression.lineProgress(),
             Expression.color(routeLineTraveledColor),
             Expression.stop(
-                offset.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN),
+                offset/*.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
                 Expression.color(routeDefaultColor)
             )
         )
@@ -918,7 +932,7 @@ internal class MapRouteLine(
             return
         }
 
-        ifNonNull(primaryRoute, primaryRoute?.distance()) { primaryRoute, routeDistance ->
+        /*ifNonNull(primaryRoute, primaryRoute?.distance()) { primaryRoute, routeDistance ->
             val lineString = getLineStringForRoute(primaryRoute)
 
             if (lineString.coordinates().size < 2) {
@@ -943,18 +957,92 @@ internal class MapRouteLine(
                 point
             )
             val distanceTraveled = (routeDistance - distanceRemaining)
-            val percentTraveled = abs((distanceTraveled / routeDistance)).toFloat()
+            val percentTraveled = abs((distanceTraveled / routeDistance))
 
+            // Log.e("TESTSETSE", "traveled_old: $percentTraveled")
             if (percentTraveled > MINIMUM_ROUTE_LINE_OFFSET) {
                 val expression = getExpressionAtOffset(percentTraveled)
                 hideCasingLineAtOffset(percentTraveled)
                 hideRouteLineAtOffset(percentTraveled)
                 decorateRouteLine(expression)
             }
+        }*/
+
+        ifNonNull(drawnPrimaryRouteFeatureCollection.features()?.firstOrNull()?.geometry()) { geometry ->
+            /*val nearestPointFeature = TurfMisc.nearestPointOnLine(
+                point,
+                (geometry as LineString).coordinates(),
+                TurfConstants.UNIT_METERS
+            )*/
+            // val nearestPoint = nearestPointFeature.geometry() as Point
+            val nearestPoint = point
+            val coordinates = (geometry as LineString).coordinates()
+            val distanceRemainingFromCache: Float = distanceRemainingCache[primaryRoute]
+                ?: primaryRoute?.distance()?.toFloat() ?: 0f
+            val index = calculateLastIndex(
+                coordinates,
+                distanceRemainingFromCache,
+                nearestPoint
+            )
+            val remainingCoordinates = coordinates.slice(index until coordinates.size).toMutableList()
+            remainingCoordinates.add(0, nearestPoint)
+            val remainingDistance = calculateDistance(remainingCoordinates)
+            val percentageTraveled = (1.0 - remainingDistance / primaryRouteLength)
+
+            /*Log.e("TESTSETSE", "traveled_new: $percentageTraveled")
+            Log.e("TESTSETSE", "traveled_new_float: ${percentageTraveled.toFloat()}")
+            Log.e("TESTSETSE", "index: $index")
+            Log.e("TESTSETSE", "remainingDistance: $remainingDistance")
+            Log.e("TESTSETSE", "nearestPoint: $nearestPoint")*/
+
+            if (percentageTraveled > MINIMUM_ROUTE_LINE_OFFSET) {
+                val expression = getExpressionAtOffset(percentageTraveled)
+                hideCasingLineAtOffset(percentageTraveled)
+                hideRouteLineAtOffset(percentageTraveled)
+                decorateRouteLine(expression)
+            }
         }
     }
 
+    /*var lastDist = Double.MAX_VALUE
+    for (i in (coordinates.size - 1) downTo 0) {
+        val dist = calculateDistance(listOf(nearestPoint, coordinates[i]))
+        if (dist > lastDist) {
+            index = i -1
+            break
+        }
+        lastDist = dist
+    }*/
+
     internal object MapRouteLineSupport {
+
+        private fun projectX(x: Double): Double {
+            return x / 360.0 + 0.5
+        }
+
+        private fun projectY(y: Double): Double {
+            val sin = sin(y * Math.PI / 180)
+            val y2 = 0.5 - 0.25 * ln((1 + sin) / (1 - sin)) / Math.PI
+            return when {
+                y2 < 0 -> 0.0
+                y2 > 1 -> 1.1
+                else -> y2
+            }
+        }
+
+        fun calculateDistance(points: List<Point>): Double {
+            var distance = 0.0
+            for (i in 0 until (points.size - 1)) {
+                val curr = points[i]
+                val next = points[i + 1]
+                val d = Pair(
+                    (projectX(next.longitude()) - projectX(curr.longitude())),
+                    (projectY(next.latitude()) - projectY(curr.latitude()))
+                )
+                distance += sqrt(d.first * d.first + d.second * d.second)
+            }
+            return distance
+        }
 
         fun getRouteLineScalingValues(
             styleRes: Int,
@@ -1166,24 +1254,24 @@ internal class MapRouteLine(
 
         private fun generateFeatureCollection(route: DirectionsRoute, identifier: String?):
             RouteFeatureData {
-                val routeGeometry = LineString.fromPolyline(
-                    route.geometry() ?: "",
-                    Constants.PRECISION_6
-                )
+            val routeGeometry = LineString.fromPolyline(
+                route.geometry() ?: "",
+                Constants.PRECISION_6
+            )
 
-                val routeFeature = when (identifier) {
-                    null -> Feature.fromGeometry(routeGeometry)
-                    else -> Feature.fromGeometry(routeGeometry).also {
-                        it.addBooleanProperty(identifier, true)
-                    }
+            val routeFeature = when (identifier) {
+                null -> Feature.fromGeometry(routeGeometry)
+                else -> Feature.fromGeometry(routeGeometry).also {
+                    it.addBooleanProperty(identifier, true)
                 }
-
-                return RouteFeatureData(
-                    route,
-                    FeatureCollection.fromFeatures(listOf(routeFeature)),
-                    routeGeometry
-                )
             }
+
+            return RouteFeatureData(
+                route,
+                FeatureCollection.fromFeatures(listOf(routeFeature)),
+                routeGeometry
+            )
+        }
 
         /**
          * Calculates line segments based on the legs in the route line and color representation
@@ -1220,7 +1308,7 @@ internal class MapRouteLine(
                 )
                 true -> listOf(
                     RouteLineExpressionData(
-                        0f,
+                        0.0,
                         congestionColorProvider("", isPrimaryRoute)
                     )
                 )
@@ -1272,7 +1360,7 @@ internal class MapRouteLine(
                     if (expressionStops.isEmpty()) {
                         expressionStops.add(
                             RouteLineExpressionData(
-                                0f,
+                                0.0,
                                 congestionColorProvider(congestionSections[i], isPrimary)
                             )
                         )
@@ -1280,7 +1368,7 @@ internal class MapRouteLine(
                     val routeColor = congestionColorProvider(congestionSections[i], isPrimary)
                     expressionStops.add(
                         RouteLineExpressionData(
-                            fractionalDist.toFloat(),
+                            fractionalDist,
                             routeColor
                         )
                     )
@@ -1290,7 +1378,7 @@ internal class MapRouteLine(
             if (expressionStops.isEmpty()) {
                 expressionStops.add(
                     RouteLineExpressionData(
-                        0f,
+                        0.0,
                         congestionColorProvider("", isPrimary)
                     )
                 )
@@ -1347,6 +1435,51 @@ internal class MapRouteLine(
         val getReversedCoordinates: (line: LineString) -> List<Point> = { line: LineString ->
             line.coordinates().reversed()
         }.memoize(1)
+
+        val getReversedCoordinatez: (line: List<Point>) -> List<Point> = { line: List<Point> ->
+            line.reversed()
+        }.memoize(1)
+
+        fun calculateLastIndex(
+            coordinates: List<Point>,
+            targetDistance: Float,
+            targetPoint: Point
+        ): Int {
+            val linePoints = getReversedCoordinatez(coordinates)
+            var runningDistance = 0.0
+            var lastPointIndex = 0
+
+            for (currentIndex in linePoints.indices) {
+                if (currentIndex + 1 < linePoints.size) {
+                    val nextSectionDistance = getDistanceBetweenPoints(
+                        linePoints[currentIndex],
+                        linePoints[currentIndex + 1]
+                    )
+                    if (runningDistance + nextSectionDistance > targetDistance) {
+                        val currentPointToTargetPointDist =
+                            TurfMeasurement.distance(
+                                linePoints[currentIndex],
+                                targetPoint,
+                                TurfConstants.UNIT_METERS
+                            )
+
+                        if (currentPointToTargetPointDist > nextSectionDistance) {
+                            runningDistance += nextSectionDistance
+                            lastPointIndex = currentIndex + 1
+                        } else {
+                            lastPointIndex = currentIndex
+                        }
+                        break
+                    } else {
+                        runningDistance += nextSectionDistance
+                    }
+                } else {
+                    lastPointIndex = currentIndex
+                }
+            }
+
+            return coordinates.size - 1 - lastPointIndex
+        }
 
         fun calculatePreciseDistanceTraveledAlongLine(
             line: LineString,
@@ -1414,4 +1547,4 @@ internal data class RouteFeatureData(
     val lineString: LineString
 )
 
-internal data class RouteLineExpressionData(val offset: Float, val segmentColor: Int)
+internal data class RouteLineExpressionData(val offset: Double, val segmentColor: Int)
