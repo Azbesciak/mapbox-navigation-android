@@ -15,6 +15,7 @@ import com.mapbox.geojson.Feature
 import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
+import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.mapboxsdk.location.LocationComponentConstants
 import com.mapbox.mapboxsdk.maps.Style
 import com.mapbox.mapboxsdk.plugins.annotation.Line
@@ -26,6 +27,7 @@ import com.mapbox.mapboxsdk.style.layers.PropertyFactory.lineGradient
 import com.mapbox.mapboxsdk.style.layers.SymbolLayer
 import com.mapbox.mapboxsdk.style.sources.GeoJsonOptions
 import com.mapbox.mapboxsdk.style.sources.GeoJsonSource
+import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.ui.R
 import com.mapbox.navigation.ui.internal.route.MapRouteSourceProvider
 import com.mapbox.navigation.ui.internal.route.RouteConstants
@@ -62,12 +64,14 @@ import com.mapbox.navigation.utils.internal.ThreadController
 import com.mapbox.navigation.utils.internal.ifNonNull
 import com.mapbox.navigation.utils.internal.parallelMap
 import com.mapbox.turf.TurfConstants
+import com.mapbox.turf.TurfException
 import com.mapbox.turf.TurfMeasurement
 import com.mapbox.turf.TurfMisc
 import timber.log.Timber
 import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -134,6 +138,9 @@ internal class MapRouteLine(
         routeLineInitializedCallback
     )
 
+    private var remainingPointsOnRoute: List<Point> = emptyList()
+    private var completeRoutePoints: List<List<List<Point>>> = emptyList()
+    private var remainingPointsOnCurrentStep = emptyList<Point>()
     private var drawnWaypointsFeatureCollection: FeatureCollection =
         FeatureCollection.fromFeatures(arrayOf())
     private var drawnPrimaryRouteFeatureCollection: FeatureCollection =
@@ -337,6 +344,7 @@ internal class MapRouteLine(
         if (routeFeatureData.isNotEmpty()) {
             this.primaryRoute = routeFeatureDatas.first().route
             this.drawnPrimaryRouteFeatureCollection = routeFeatureData.first().featureCollection
+            completeRoutePoints = parseRoutePoints(routeFeatureData.first().route)
             this.drawnAlternativeRouteFeatureCollection = routeFeatureData
                 .filter { it.route != primaryRoute }
                 .mapNotNull { it.featureCollection.features() }
@@ -409,8 +417,51 @@ internal class MapRouteLine(
         )
     }
 
+    private fun parseRoutePoints(route: DirectionsRoute): List<List<List<Point>>> {
+        return route.legs()?.map { routeLeg ->
+            routeLeg.steps()?.map { legStep ->
+                legStep.geometry()?.let { geometry ->
+                    PolylineUtils.decode(geometry, 6).toList()
+                } ?: emptyList()
+            } ?: emptyList()
+        } ?: emptyList()
+    }
+
     fun updateDistanceRemainingCache(route: DirectionsRoute, distanceRemaining: Float) {
         distanceRemainingCache.put(route, distanceRemaining)
+    }
+
+    fun routeProgress(routeProgress: RouteProgress) {
+        routeProgress.currentLegProgress?.let { currentLegProgress ->
+            currentLegProgress.currentStepProgress?.let { currentStepProgress ->
+                val currentStepFullPoints = currentStepProgress.stepPoints ?: emptyList()
+                // TODO: do we need max here?
+                var distanceTraveledOnStepKM = max(
+                    currentStepProgress.distanceTraveled / 1000.0, 0.0)
+                // TODO: do we need max here?
+                val fullDistanceOfCurrentStepKM = max(
+                    (currentStepProgress.distanceRemaining
+                        + currentStepProgress.distanceTraveled) / 1000.0,
+                    0.0)
+                // TODO: will distanceTraveledOnStepKM be greater than fullDistanceOfCurrentStepKM in any case?
+                if (distanceTraveledOnStepKM > fullDistanceOfCurrentStepKM) distanceTraveledOnStepKM = 0.0
+
+                try {
+                    remainingPointsOnCurrentStep = TurfMisc.lineSliceAlong(
+                        LineString.fromLngLats(currentStepFullPoints),
+                        distanceTraveledOnStepKM,
+                        fullDistanceOfCurrentStepKM, TurfConstants.UNIT_KILOMETERS
+                    ).coordinates()
+                } catch (e: TurfException) {
+                    return
+                }
+
+                val currentLegPoints = completeRoutePoints[currentLegProgress.legIndex]
+                val remainingStepsAfterCurrentStep = if (currentStepProgress.stepIndex < currentLegPoints.size) currentLegPoints.slice(currentStepProgress.stepIndex + 1 until currentLegPoints.size - 1) else emptyList()
+                val remainingPointsAfterCurrentStep = remainingStepsAfterCurrentStep.flatten()
+                remainingPointsOnRoute = listOf(remainingPointsOnCurrentStep, remainingPointsAfterCurrentStep).flatten()
+            }
+        }
     }
 
     fun inhibitVanishingPointUpdate(inhibitVanishingPointUpdate: Boolean) {
@@ -719,6 +770,7 @@ internal class MapRouteLine(
             val expression = getExpressionAtOffset(vanishPointOffset)
             style.getLayer(PRIMARY_ROUTE_TRAFFIC_LAYER_ID)?.setProperties(lineGradient(expression))
         }
+        completeRoutePoints = parseRoutePoints(routeData.route)
     }
 
     private fun updateRouteTrafficSegments(routeData: RouteFeatureData) {
@@ -976,16 +1028,16 @@ internal class MapRouteLine(
             )*/
             // val nearestPoint = nearestPointFeature.geometry() as Point
             val nearestPoint = point
-            val coordinates = (geometry as LineString).coordinates()
+            /*val coordinates = (geometry as LineString).coordinates()
             val distanceRemainingFromCache: Float = distanceRemainingCache[primaryRoute]
                 ?: primaryRoute?.distance()?.toFloat() ?: 0f
             val index = calculateLastIndex(
                 coordinates,
                 distanceRemainingFromCache,
                 nearestPoint
-            )
-            val remainingCoordinates = coordinates.slice(index until coordinates.size).toMutableList()
-            remainingCoordinates.add(0, nearestPoint)
+            )*/
+            val remainingCoordinates = mutableListOf(nearestPoint)
+            remainingCoordinates.addAll(remainingPointsOnRoute)
             val remainingDistance = calculateDistance(remainingCoordinates)
             val percentageTraveled = (1.0 - remainingDistance / primaryRouteLength)
 
