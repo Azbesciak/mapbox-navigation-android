@@ -6,6 +6,7 @@ import androidx.annotation.AnyRes
 import androidx.annotation.ColorInt
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
+import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteLeg
 import com.mapbox.core.constants.Constants
@@ -128,7 +129,7 @@ internal class MapRouteLine(
     )
 
     private var remainingPointsOnRoute: List<Point>? = null
-    private var completeRoutePoints: List<List<List<Point>>> = emptyList()
+    private var completeRoutePoints: List<List<List<Point>>>? = null
     private var primaryRouteLength = 0.0
     private var drawnWaypointsFeatureCollection: FeatureCollection =
         FeatureCollection.fromFeatures(arrayOf())
@@ -405,21 +406,28 @@ internal class MapRouteLine(
         )
     }
 
-    private fun parseRoutePoints(route: DirectionsRoute): List<List<List<Point>>> {
+    private fun parseRoutePoints(route: DirectionsRoute): List<List<List<Point>>>? {
+        val precision =
+            if (route.routeOptions()?.geometries() == DirectionsCriteria.GEOMETRY_POLYLINE) {
+                Constants.PRECISION_5
+            } else {
+                Constants.PRECISION_6
+            }
         return route.legs()?.map { routeLeg ->
             routeLeg.steps()?.map { legStep ->
                 legStep.geometry()?.let { geometry ->
-                    PolylineUtils.decode(geometry, 6).toList()
-                } ?: emptyList()
-            } ?: emptyList()
-        } ?: emptyList()
+                    PolylineUtils.decode(geometry, precision).toList()
+                } ?: return null
+            } ?: return null
+        } ?: return null
     }
 
     fun updateRemainingPointsOnRoute(routeProgress: RouteProgress) {
         ifNonNull(
             routeProgress.currentLegProgress,
-            routeProgress.currentLegProgress?.currentStepProgress
-        ) { currentLegProgress, currentStepProgress ->
+            routeProgress.currentLegProgress?.currentStepProgress,
+            completeRoutePoints
+        ) { currentLegProgress, currentStepProgress, completeRoutePoints ->
             val remainingPointsOnCurrentStep = try {
                 TurfMisc.lineSliceAlong(
                     LineString.fromLngLats(currentStepProgress.stepPoints ?: emptyList()),
@@ -445,7 +453,7 @@ internal class MapRouteLine(
                 remainingPointsOnCurrentStep,
                 remainingPointsAfterCurrentStep
             ).flatten()
-        }
+        } ?: run { remainingPointsOnRoute = null }
     }
 
     fun inhibitVanishingPointUpdate(inhibitVanishingPointUpdate: Boolean) {
@@ -756,6 +764,7 @@ internal class MapRouteLine(
         }
         calculateRoutesDistance(routeData.featureCollection)
         completeRoutePoints = parseRoutePoints(routeData.route)
+        remainingPointsOnRoute = null
     }
 
     private fun updateRouteTrafficSegments(routeData: RouteFeatureData) {
@@ -806,7 +815,7 @@ internal class MapRouteLine(
             }
         }.map {
             Expression.stop(
-                it/*.offset.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
+                it,
                 Expression.color(it.segmentColor)
             )
         }
@@ -820,6 +829,9 @@ internal class MapRouteLine(
 
     fun clearRouteData() {
         vanishPointOffset = 0.0
+        remainingPointsOnRoute = null
+        completeRoutePoints = null
+        primaryRouteLength = 0.0
         primaryRoute = null
         directionsRoutes.clear()
         routeFeatureData.clear()
@@ -919,7 +931,7 @@ internal class MapRouteLine(
             Expression.lineProgress(),
             Expression.color(routeLineCasingTraveledColor),
             Expression.stop(
-                offset/*.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
+                offset,
                 Expression.color(routeCasingColor)
             )
         )
@@ -939,7 +951,7 @@ internal class MapRouteLine(
             Expression.lineProgress(),
             Expression.color(routeLineTraveledColor),
             Expression.stop(
-                offset/*.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN)*/,
+                offset,
                 Expression.color(routeDefaultColor)
             )
         )
@@ -959,11 +971,7 @@ internal class MapRouteLine(
      */
     fun decorateRouteLine(expression: Expression) {
         if (style.isFullyLoaded) {
-            style.getLayer(PRIMARY_ROUTE_TRAFFIC_LAYER_ID)?.setProperties(
-                lineGradient(
-                    expression
-                )
-            )
+            style.getLayer(PRIMARY_ROUTE_TRAFFIC_LAYER_ID)?.setProperties(lineGradient(expression))
         }
     }
 
@@ -972,7 +980,7 @@ internal class MapRouteLine(
      * @param point representing the portion of the route that has been traveled.
      */
     fun updateTraveledRouteLine(point: Point) {
-        if (vanishingPointUpdateInhibited) {
+        if (vanishingPointUpdateInhibited || completeRoutePoints == null) {
             return
         }
 
