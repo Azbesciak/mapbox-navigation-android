@@ -128,8 +128,8 @@ internal class MapRouteLine(
         routeLineInitializedCallback
     )
 
-    private var remainingPointsOnRoute: List<Point>? = null
-    private var completeRoutePoints: List<List<List<Point>>>? = null
+    private var primaryRouteRemainingPoints: List<Point>? = null
+    private var primaryRouteAllPoints: List<List<List<Point>>>? = null
     private var primaryRouteLength = 0.0
     private var drawnWaypointsFeatureCollection: FeatureCollection =
         FeatureCollection.fromFeatures(arrayOf())
@@ -333,7 +333,7 @@ internal class MapRouteLine(
         if (routeFeatureData.isNotEmpty()) {
             this.primaryRoute = routeFeatureDatas.first().route
             this.drawnPrimaryRouteFeatureCollection = routeFeatureData.first().featureCollection
-            completeRoutePoints = parseRoutePoints(routeFeatureData.first().route)
+            primaryRouteAllPoints = parseRoutePoints(routeFeatureData.first().route)
             this.drawnAlternativeRouteFeatureCollection = routeFeatureData
                 .filter { it.route != primaryRoute }
                 .mapNotNull { it.featureCollection.features() }
@@ -426,7 +426,7 @@ internal class MapRouteLine(
         ifNonNull(
             routeProgress.currentLegProgress,
             routeProgress.currentLegProgress?.currentStepProgress,
-            completeRoutePoints
+            primaryRouteAllPoints
         ) { currentLegProgress, currentStepProgress, completeRoutePoints ->
             val remainingPointsOnCurrentStep = try {
                 TurfMisc.lineSliceAlong(
@@ -435,7 +435,7 @@ internal class MapRouteLine(
                     currentStepProgress.step?.distance() ?: 0.0, TurfConstants.UNIT_METERS
                 ).coordinates()
             } catch (e: TurfException) {
-                remainingPointsOnRoute = null
+                primaryRouteRemainingPoints = null
                 return
             }
 
@@ -449,11 +449,11 @@ internal class MapRouteLine(
                     emptyList()
                 }
             val remainingPointsAfterCurrentStep = remainingStepsAfterCurrentStep.flatten()
-            remainingPointsOnRoute = listOf(
+            primaryRouteRemainingPoints = listOf(
                 remainingPointsOnCurrentStep,
                 remainingPointsAfterCurrentStep
             ).flatten()
-        } ?: run { remainingPointsOnRoute = null }
+        } ?: run { primaryRouteRemainingPoints = null }
     }
 
     fun inhibitVanishingPointUpdate(inhibitVanishingPointUpdate: Boolean) {
@@ -762,9 +762,9 @@ internal class MapRouteLine(
             val expression = getExpressionAtOffset(vanishPointOffset)
             style.getLayer(PRIMARY_ROUTE_TRAFFIC_LAYER_ID)?.setProperties(lineGradient(expression))
         }
-        calculateRoutesDistance(routeData.featureCollection)
-        completeRoutePoints = parseRoutePoints(routeData.route)
-        remainingPointsOnRoute = null
+        primaryRouteLength= calculateRouteDistance(routeData.featureCollection)
+        primaryRouteAllPoints = parseRoutePoints(routeData.route)
+        primaryRouteRemainingPoints = null
     }
 
     private fun updateRouteTrafficSegments(routeData: RouteFeatureData) {
@@ -829,8 +829,8 @@ internal class MapRouteLine(
 
     fun clearRouteData() {
         vanishPointOffset = 0.0
-        remainingPointsOnRoute = null
-        completeRoutePoints = null
+        primaryRouteRemainingPoints = null
+        primaryRouteAllPoints = null
         primaryRouteLength = 0.0
         primaryRoute = null
         directionsRoutes.clear()
@@ -846,9 +846,9 @@ internal class MapRouteLine(
         primaryRouteLineSource.setGeoJson(drawnPrimaryRouteFeatureCollection)
     }
 
-    private fun calculateRoutesDistance(featureCollection: FeatureCollection) {
+    private fun calculateRouteDistance(featureCollection: FeatureCollection): Double {
         val geometry = featureCollection.features()?.firstOrNull()?.geometry()
-        primaryRouteLength = if (geometry is LineString) {
+        return if (geometry is LineString) {
             val coordinates = geometry.coordinates()
             if (coordinates.isNotEmpty()) {
                 calculateDistance(coordinates)
@@ -980,11 +980,11 @@ internal class MapRouteLine(
      * @param point representing the portion of the route that has been traveled.
      */
     fun updateTraveledRouteLine(point: Point) {
-        if (vanishingPointUpdateInhibited || completeRoutePoints == null) {
+        if (vanishingPointUpdateInhibited || primaryRouteAllPoints == null) {
             return
         }
 
-        ifNonNull(remainingPointsOnRoute) { remainingPointsOnRoute ->
+        ifNonNull(primaryRouteRemainingPoints) { remainingPointsOnRoute ->
             val remainingCoordinates = mutableListOf(point)
             remainingCoordinates.addAll(remainingPointsOnRoute)
             val remainingDistance = calculateDistance(remainingCoordinates)
