@@ -1,14 +1,9 @@
 package com.mapbox.navigation.ui.route
 
 import com.mapbox.api.directions.v5.models.DirectionsRoute
-import com.mapbox.geojson.LineString
 import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.base.trip.model.RouteProgressState
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
-import com.mapbox.turf.TurfConstants
-import com.mapbox.turf.TurfException
-import com.mapbox.turf.TurfMisc
-import kotlin.math.max
 
 /**
  * Upon receiving route progress events draws and/or updates the line on the map representing the
@@ -35,8 +30,7 @@ internal class MapRouteProgressChangeListener(
     }
 
     private fun updateRoute(directionsRoute: DirectionsRoute?, routeProgress: RouteProgress) {
-        routeLine.routeProgress(routeProgress)
-        routeLine.updateDistanceRemainingCache(routeProgress.route, routeProgress.distanceRemaining)
+        routeLine.updateRemainingPointsOnRoute(routeProgress)
 
         val currentRoute = routeProgress.route
         val hasGeometry = currentRoute.geometry()?.isNotEmpty() ?: false
