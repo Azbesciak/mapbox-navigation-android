@@ -762,7 +762,7 @@ internal class MapRouteLine(
             val expression = getExpressionAtOffset(vanishPointOffset)
             style.getLayer(PRIMARY_ROUTE_TRAFFIC_LAYER_ID)?.setProperties(lineGradient(expression))
         }
-        primaryRouteLength= calculateRouteDistance(routeData.featureCollection)
+        primaryRouteLength = calculateRouteDistance(routeData.featureCollection)
         primaryRouteAllPoints = parseRoutePoints(routeData.route)
         primaryRouteRemainingPoints = null
     }
@@ -815,7 +815,7 @@ internal class MapRouteLine(
             }
         }.map {
             Expression.stop(
-                it,
+                it.offset,
                 Expression.color(it.segmentColor)
             )
         }
