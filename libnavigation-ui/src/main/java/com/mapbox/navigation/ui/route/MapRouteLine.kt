@@ -801,7 +801,7 @@ internal class MapRouteLine(
         val filteredItems = routeLineExpressionData.filter { it.offset > distanceOffset }
         val trafficExpressions = when (filteredItems.isEmpty()) {
             true -> when (routeLineExpressionData.isEmpty()) {
-                true -> listOf(RouteLineExpressionData(distanceOffset, routeUnknownColor))
+                true -> listOf(RouteLineExpressionData(distanceOffset, Expression.color(routeUnknownColor)))
                 false -> listOf(routeLineExpressionData.last().copy(offset = distanceOffset))
             }
             false -> {
@@ -816,7 +816,7 @@ internal class MapRouteLine(
         }.map {
             Expression.stop(
                 it.offset,
-                Expression.color(it.segmentColor)
+                it.segmentColorExpression
             )
         }
 
@@ -1266,7 +1266,7 @@ internal class MapRouteLine(
                 true -> listOf(
                     RouteLineExpressionData(
                         0.0,
-                        congestionColorProvider("", isPrimaryRoute)
+                        Expression.color(congestionColorProvider("", isPrimaryRoute))
                     )
                 )
             }
@@ -1318,7 +1318,7 @@ internal class MapRouteLine(
                         expressionStops.add(
                             RouteLineExpressionData(
                                 0.0,
-                                congestionColorProvider(congestionSections[i], isPrimary)
+                                Expression.color(congestionColorProvider(congestionSections[i], isPrimary))
                             )
                         )
                     }
@@ -1326,7 +1326,7 @@ internal class MapRouteLine(
                     expressionStops.add(
                         RouteLineExpressionData(
                             fractionalDist,
-                            routeColor
+                            Expression.color(routeColor)
                         )
                     )
                     previousCongestion = congestionSections[i]
@@ -1336,7 +1336,7 @@ internal class MapRouteLine(
                 expressionStops.add(
                     RouteLineExpressionData(
                         0.0,
-                        congestionColorProvider("", isPrimary)
+                        Expression.color(congestionColorProvider("", isPrimary))
                     )
                 )
             }
@@ -1389,11 +1389,11 @@ internal class MapRouteLine(
             for (i in 0 until (points.size - 1)) {
                 val curr = points[i]
                 val next = points[i + 1]
-                val d = Pair(
+                val d = doubleArrayOf(
                     (projectX(next.longitude()) - projectX(curr.longitude())),
                     (projectY(next.latitude()) - projectY(curr.latitude()))
                 )
-                distance += sqrt(d.first * d.first + d.second * d.second)
+                distance += sqrt(d[0] * d[0] + d[1] * d[1])
             }
             return distance
         }
@@ -1428,4 +1428,4 @@ internal data class RouteFeatureData(
     val lineString: LineString
 )
 
-internal data class RouteLineExpressionData(val offset: Double, val segmentColor: Int)
+internal data class RouteLineExpressionData(val offset: Double, val segmentColorExpression: Expression)
