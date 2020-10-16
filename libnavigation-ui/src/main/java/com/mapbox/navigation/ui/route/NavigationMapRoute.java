@@ -13,6 +13,7 @@ import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.OnLifecycleEvent;
 
 import com.mapbox.api.directions.v5.models.DirectionsRoute;
+import com.mapbox.geojson.Point;
 import com.mapbox.mapboxsdk.location.OnIndicatorPositionChangedListener;
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver;
 import com.mapbox.navigation.ui.R;
@@ -325,8 +326,21 @@ public class NavigationMapRoute implements LifecycleObserver {
     }
   }
 
-  private OnIndicatorPositionChangedListener onIndicatorPositionChangedListener = point -> {
-    routeLine.updateTraveledRouteLine(point);
+  private OnIndicatorPositionChangedListener onIndicatorPositionChangedListener = new OnIndicatorPositionChangedListener() {
+
+    private final static int MAX_UPDATE_FPS = 5;
+    private final static double minUpdateIntervalNano = 1E9 / MAX_UPDATE_FPS;
+    private long lastUpdateNano = 0;
+
+    @Override
+    public void onIndicatorPositionChanged(@NonNull Point point) {
+      long currentTimeNano = System.nanoTime();
+      if (currentTimeNano - lastUpdateNano < minUpdateIntervalNano) {
+        return;
+      }
+      routeLine.updateTraveledRouteLine(point);
+      lastUpdateNano = currentTimeNano;
+    }
   };
 
   /**
