@@ -1210,15 +1210,6 @@ internal class MapRouteLine(
                 ?.map { it.annotation()?.congestion() ?: listOf() }
                 ?.flatten() ?: listOf()
 
-
-            route.legs()?.forEach {
-                it.steps()?.forEach { legStep ->
-                    legStep.intersections()?.forEach {  stepIntersection ->
-                        Timber.e("*** road class ${stepIntersection.mapboxStreetsV8()?.roadClass()}")
-                    }
-                }
-            }
-
             return when (congestionSections.isEmpty()) {
                 false -> calculateRouteLineSegmentsFromCongestion(
                     congestionSections,
@@ -1241,7 +1232,7 @@ internal class MapRouteLine(
          * of the traffic congestion.
          *
          * @param congestionSections the traffic congestion sections from the route legs
-         * @param lineString an optional LineString derived from the [DirectionsRoute.geometry]
+         * @param lineString a [LineString] derived from the [DirectionsRoute.geometry]
          * @param routeDistance the total distance of the route
          * @param isPrimary indicates if the route used is the primary route
          * @param congestionColorProvider a function that provides the colors used for various
@@ -1406,6 +1397,116 @@ internal class MapRouteLine(
                 runningDistance + distFromTargetToLastIndexPoint
             }
         }
+
+        fun getTrafficInfoFromLeg(indexesOfRoadClasses: List<Pair<Int, String>>, leg: RouteLeg): List<TrafficInfo> {
+            val trafficInfo = mutableListOf<TrafficInfo>()
+            var index = 0
+
+            while(index < indexesOfRoadClasses.size) {
+                val defaultCongestion = leg.annotation()?.congestion()?.get(indexesOfRoadClasses[index].first) ?: "unknown"
+                val sectionDistance = if(index + 1 < indexesOfRoadClasses.size) {
+                    leg.annotation()?.distance()?.subList(indexesOfRoadClasses[index].first,  indexesOfRoadClasses[index + 1].first)?.sum() ?: 0.0
+                } else {
+                    leg.annotation()?.distance()?.get(indexesOfRoadClasses.last().first) ?: 0.0
+                }
+                trafficInfo.add(TrafficInfo(defaultCongestion, sectionDistance, indexesOfRoadClasses[index].second))
+                index += 1
+            }
+            return trafficInfo
+        }
+
+        fun getRoadClassesForLeg(leg: RouteLeg): List<Pair<Int, String>> {
+            return leg.steps()?.asSequence()?.filterNotNull()?.map { legStep ->
+                legStep.intersections()
+            }?.filterNotNull()?.flatten()?.filter {
+                it.geometryIndex() != null && it.mapboxStreetsV8()?.roadClass() != null
+            }?.map {  intersection ->
+                Pair(intersection.geometryIndex()!!, intersection.mapboxStreetsV8()!!.roadClass()!!)
+            }?.toList() ?: listOf()
+        }
+
+        @Deprecated("temporary", ReplaceWith(""))
+        fun getRoadClassesForRoute(route: DirectionsRoute): List<Pair<Int, String>> {
+            return route.legs()?.map(::getRoadClassesForLeg)?.flatten() ?: listOf()
+        }
+
+
+        fun getRoadClassesForLeg2(leg: RouteLeg): Pair<List<Pair<Int, String>>, RouteLeg> {
+            val roadClassesAndIndexes =  leg.steps()?.asSequence()?.filterNotNull()?.map { legStep ->
+                legStep.intersections()
+            }?.filterNotNull()?.flatten()?.filter {
+                it.geometryIndex() != null && it.mapboxStreetsV8()?.roadClass() != null
+            }?.map {  intersection ->
+                Pair(intersection.geometryIndex()!!, intersection.mapboxStreetsV8()!!.roadClass()!!)
+            }?.toList() ?: listOf()
+
+            return Pair(roadClassesAndIndexes, leg)
+        }
+
+        fun getRouteLineTrafficExpressionData(leg: RouteLeg): List<RouteLineTrafficExpressionData> {
+            ifNonNull(leg.annotation(), leg.annotation()!!.distance(), leg.annotation()!!.congestion()) { _, legAnnotationDistance, congestionList ->
+                val trafficItems: List<RouteLineTrafficExpressionData> = leg.steps()?.asSequence()?.map { legStep ->
+                    legStep.intersections()
+                }?.filterNotNull()?.flatten()?.filter {
+                    it.geometryIndex() != null && it.mapboxStreetsV8()?.roadClass() != null
+                }?.map { intersection ->
+                    val distanceOffset = legAnnotationDistance.subList(0, intersection.geometryIndex()!!).sum()
+                    RouteLineTrafficExpressionData(
+                        distanceOffset,
+                        congestionList[intersection.geometryIndex()!!] ?: UNKNOWN_CONGESTION_VALUE,
+                        intersection.mapboxStreetsV8()?.roadClass())
+                }?.toList() ?: listOf()
+
+                return when (trafficItems.isEmpty()) {
+                    false -> {
+                        trafficItems
+                    }
+                    true -> {
+                        congestionList.mapIndexed { index, trafficCongestion ->
+                            val distanceOffset = legAnnotationDistance.subList(0, index).sum()
+                            RouteLineTrafficExpressionData(distanceOffset, trafficCongestion, null)
+                        }
+                    }
+                }
+            }
+            Timber.i("Route leg annotation does not contain distance and/or congestion so route line traffic cannot be calculated.")
+            return listOf()
+        }
+
+        // todo include an input that will optionally replace the 'unknown' traffic color based on the street class
+        fun getRouteLineExpressionDataWithStreetClassOverride(
+            trafficExpressionData: List<RouteLineTrafficExpressionData>,
+            routeDistance: Double,
+            congestionColorProvider: (String, Boolean) -> Int,
+            isPrimaryRoute: Boolean
+        ): List<RouteLineExpressionData> {
+            return trafficExpressionData.map {
+                val percentDistanceTraveled = it.distanceFromOrigin / routeDistance
+                val trafficColor = congestionColorProvider(it.trafficCongestionIdentifier, isPrimaryRoute)
+                RouteLineExpressionData(percentDistanceTraveled.toFloat(), trafficColor)
+            }
+        }
+
+        // todo: can be optimized by using parallel map
+        fun getTrafficInfoForRoute(route: DirectionsRoute):List<TrafficInfo> {
+            return route.legs()?.map(::getRoadClassesForLeg2)?.map {
+                getTrafficInfoFromLeg(it.first, it.second)
+            }?.flatten() ?: listOf()
+        }
+
+        // todo add a parameter to override the colors for road class/traffic combinations
+        fun getTrafficExpressions(trafficInfo: List<TrafficInfo>, routeDistance: Double): List<Expression.Stop> {
+            val trafficExpressionStops = mutableListOf<Expression.Stop>()
+            var runningDistance = 0.0
+            for (index in trafficInfo.indices) {
+                runningDistance += trafficInfo[index].distance
+                val percentDistanceTraveled = (runningDistance / routeDistance)
+                val color: Int = 0 //this should either be the default congestion color or an override based on the road class and the default color
+                trafficExpressionStops.add(Expression.stop(percentDistanceTraveled.toBigDecimal().setScale(9, BigDecimal.ROUND_DOWN), color))
+            }
+
+            return trafficExpressionStops
+        }
     }
 }
 
@@ -1424,3 +1525,8 @@ internal data class RouteFeatureData(
 )
 
 internal data class RouteLineExpressionData(val offset: Float, val segmentColor: Int)
+internal data class RouteLineTrafficExpressionData(val distanceFromOrigin: Double, val trafficCongestionIdentifier: String, val roadClass: String?)
+
+
+//fixme temporary
+data class TrafficInfo(val defaultTrafficCongestion: String, val distance: Double, val roadClass: String)
